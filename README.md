@@ -142,27 +142,6 @@ Commands failed: 0
 
 ---
 
-## 📚 Documentation
-
-### For Developers
-- **[BLOCKING_SYSTEM_GUIDE.md](BLOCKING_SYSTEM_GUIDE.md)** - Complete architecture, API reference, examples
-- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - What was implemented and where
-
-### For Operations
-- **[BLOCKING_SYSTEM_CHECKLIST.md](BLOCKING_SYSTEM_CHECKLIST.md)** - Deployment, testing, troubleshooting
-
-### Backend Files
-- `backend/block_manager.py` - Command persistence layer (SQLite)
-- `backend/attack_analyzer.py` - Attack classification logic
-- `backend/routes.py` - REST API endpoints for blocking commands
-
-### ESP32 Files  
-- `edge_device/src/block_command.h` - Blocking execution logic
-- `edge_device/src/mqtt_client.h` - MQTT command subscription
-- `edge_device/src/main.cpp` - Command processing loop
-
----
-
 ## 🔧 API Endpoints
 
 ### Create Blocking Command
