@@ -1,0 +1,35 @@
+/all_files_report.txt
+/BLOCKING_SYSTEM_CHECKLIST.md
+/BLOCKING_SYSTEM_GUIDE.md
+/FILE_PURPOSES.txt
+/IMPLEMENTATION_SUMMARY.md
+/WORKFLOW_AND_PROCESSES.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# VS Code
+.vscode/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+.serverless/
+.env*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dataset files used for model training
+# Ignore all CSVs in the backend dataset folder
+/backend/dataset/*.csv

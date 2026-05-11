@@ -1,0 +1,97 @@
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&family=Orbitron:wght@400;700;900&display=swap');
+
+:root {
+  --bg-void:       #030508;
+  --bg-deep:       #060c14;
+  --bg-panel:      #0a1520;
+  --bg-card:       #0d1e2e;
+  --bg-hover:      #112336;
+
+  --accent-cyan:   #00d4ff;
+  --accent-green:  #00ff88;
+  --accent-red:    #ff2d55;
+  --accent-amber:  #ffb800;
+  --accent-purple: #9d4edd;
+
+  --border-dim:    rgba(0, 212, 255, 0.12);
+  --border-mid:    rgba(0, 212, 255, 0.25);
+  --border-bright: rgba(0, 212, 255, 0.5);
+
+  --text-primary:  #e8f4ff;
+  --text-secondary:#7aa8c7;
+  --text-dim:      #3d6680;
+
+  --glow-cyan:     0 0 20px rgba(0, 212, 255, 0.3);
+  --glow-green:    0 0 20px rgba(0, 255, 136, 0.3);
+  --glow-red:      0 0 20px rgba(255, 45, 85, 0.4);
+
+  --font-mono:     'Share Tech Mono', monospace;
+  --font-display:  'Orbitron', sans-serif;
+  --font-body:     'Rajdhani', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 15px;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(0,212,255,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(0,255,136,0.03) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--accent-cyan); border-radius: 2px; }
+
+.scanline {
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes sweep {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+
+.animate-in {
+  animation: slide-in 0.4s ease forwards;
+}
