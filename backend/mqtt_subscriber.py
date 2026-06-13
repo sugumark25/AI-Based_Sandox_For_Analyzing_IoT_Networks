@@ -47,6 +47,7 @@ SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
 TOPIC_FLOWS  = "iot/flows/#"        # subscribe wildcard — all devices
 TOPIC_ALERT  = "iot/alerts/{}"      # publish back to device
 TOPIC_STATS  = "iot/server/stats"   # periodic stats publish
+TOPIC_MIRROR = "iot/mirror/#"       # mirrored metadata from edge
 
 # ── Runtime stats ─────────────────────────────────────────────────────────────
 _stats = {
@@ -59,10 +60,29 @@ _lock = threading.Lock()
 def load_resources():
     """Load scaler and detector once at startup."""
     if not os.path.exists(SCALER_PATH):
-        raise FileNotFoundError("scaler.pkl not found. Run train.py first.")
-    scaler   = joblib.load(SCALER_PATH)
-    detector = get_detector()
-    log.info("Models loaded. AE threshold=%.6f", detector.ae_threshold)
+        # Don't raise — allow the subscriber to run without models.
+        log.warning("scaler.pkl not found. Running without ML models. Run train.py to generate models if available.")
+        try:
+            detector = get_detector()
+        except Exception:
+            detector = None
+        return None, detector
+    try:
+        scaler = joblib.load(SCALER_PATH)
+    except Exception as e:
+        log.warning("Failed loading scaler.pkl: %s", e)
+        scaler = None
+    try:
+        detector = get_detector()
+    except Exception as e:
+        log.warning("Failed loading detector: %s", e)
+        detector = None
+
+    if detector is not None:
+        try:
+            log.info("Models loaded. AE threshold=%.6f", detector.ae_threshold)
+        except Exception:
+            pass
     return scaler, detector
 
 
@@ -119,7 +139,9 @@ def on_connect(client, userdata, flags, rc):
     if rc == 0:
         log.info("Connected to MQTT broker")
         client.subscribe(TOPIC_FLOWS, qos=1)
+        client.subscribe(TOPIC_MIRROR, qos=1)
         log.info("Subscribed → %s", TOPIC_FLOWS)
+        log.info("Subscribed → %s", TOPIC_MIRROR)
     else:
         log.error("Connection failed: rc=%d", rc)
 
@@ -140,6 +162,21 @@ def on_message(client, userdata, msg):
         raw = json.loads(msg.payload.decode("utf-8"))
     except json.JSONDecodeError as e:
         log.warning("Bad JSON from %s: %s", device_id, e)
+        return
+
+    # If this is a mirrored sample, handle via sandbox ingestion
+    if msg.topic.startswith("iot/mirror"):
+        try:
+            from sandbox import ingest_sample as ingest_mirror
+            rec = ingest_mirror(raw)
+            log.info("Sandbox ingested mirror from %s → %s", device_id, rec.get("sandbox_decision"))
+            try:
+                from server import socketio
+                socketio.emit("mirrored_sample", {**rec})
+            except Exception:
+                pass
+        except Exception as e:
+            log.error("Failed to handle mirrored sample: %s", e)
         return
 
     try:

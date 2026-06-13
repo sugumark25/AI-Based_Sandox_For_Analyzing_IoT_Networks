@@ -22,6 +22,7 @@ export const fetchAttacks       = (n=100) => _get(`/api/flows/attacks?n=${n}`);
 export const fetchRecentSensors = (n=30)  => _get(`/api/sensor/recent?n=${n}`);
 export const fetchSensorStats   = ()      => _get("/api/sensor/stats");
 export const fetchHealth        = ()      => _get("/api/health");
+export const fetchMirrors       = (limit=50) => _get(`/api/mirror/history?limit=${limit}`);
 
 // ── Socket.IO ─────────────────────────
 

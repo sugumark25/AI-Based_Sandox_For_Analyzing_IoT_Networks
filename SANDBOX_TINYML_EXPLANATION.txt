@@ -1,0 +1,144 @@
+Overview
+
+This document explains how the project’s sandbox, ESP32 Tiny‑ML feed‑forward neural network (FFNN), mirroring, and blocking flows work end-to-end. It describes which components and tools are used, why they were chosen, and how they interact to detect, confirm, and block attack patterns while fitting a TinyML model into constrained device memory.
+
+1) High-level flow
+
+- Edge (ESP32) captures flows, extracts features, scales them, and runs a small feed‑forward neural network (TinyML) locally.
+- If the edge model indicates an anomaly above configured thresholds, the device may: (a) immediately act locally (lightweight enforcement), (b) mirror a sample to the backend for deeper analysis, or (c) both.
+- Mirrored samples arrive at the backend (MQTT or HTTP). The backend persists the sample and the sandbox runs a deeper analysis model/heuristic to confirm or reject the detection.
+- If the sandbox confirms an attack, the backend creates a blocking command and either publishes it to the device via MQTT or keeps it in a pending queue that the device polls. The device applies the blocking command locally (pattern/block list) to drop or ignore offending traffic.
+
+2) ESP32 TinyML (Feed‑Forward Neural Network) — what and why
+
+- Role: provide ultra‑low latency, low‑power anomaly scoring at the network edge so many flows can be triaged without roundtrips to the server.
+- Architecture: a compact feed‑forward neural network (Dense layers only). Typical shape used in the project:
+  - Input: N numeric features (per‑flow aggregated statistics).
+  - Hidden layers: one or two small Dense layers (e.g., 16–64 units) with ReLU activation.
+  - Output: single neuron with sigmoid (or small SoftMax) producing an anomaly score between 0 and 1.
+- Why FFNN: small matrix multiplies, easy to implement in fixed‑point, deterministic runtime, and low memory/CPU compared with CNN/RNN.
+
+3) Training and producing the TinyML artifact (what happens in `backend/train.py`, `train_tflite.py`, `export_weights.py`)
+
+- Training (desktop/server):
+  - Use `train.py` to load labeled data (CSV files in `backend/dataset/`), build a small Keras Sequential model, and train with binary cross‑entropy (for anomaly/normal) or a reconstruction loss for an autoencoder.
+  - Save trained model artifacts (Keras HDF5 or SavedModel) and evaluation metrics (`models/autoencoder_model.keras`, `models/metrics.json`).
+- Conversion to TFLite: `train_tflite.py` runs TensorFlow Lite converter to turn the model into a FlatBuffer `.tflite` file. Important options used for a TinyML target:
+  - Post‑training quantization (e.g., full integer or dynamic range) to reduce model size and allow int8 inference.
+  - Optionally representative dataset calibration if using full integer quantization.
+- Export to C array for firmware: `export_weights.py` or a small script converts the `.tflite` binary into a C array (a header file) that is included in firmware as `edge_device/src/tinyml_weights.h`.
+  - Common tools: `xxd -i model.tflite > tinyml_weights.h` or a Python script that emits a byte array in C syntax.
+
+4) How model size is reduced to fit small memory (compression / optimizations)
+
+- Quantization: convert float32 weights to int8 (or uint8) — typically the largest win (~4x size reduction plus faster integer ops).
+- Model topology choices: very small dense layers, fewer neurons, and fewer layers reduce total parameters.
+- Post‑training techniques (optional): pruning (removing small weights), weight clustering, and structured sparsity can reduce size further.
+- TFLite FlatBuffer format is compact; TFLite Micro embeds the FlatBuffer as a C array stored in flash (ROM), not RAM. At runtime TFLite Micro allocates only the small tensors needed on the stack/static arenas.
+- Result: model is stored in flash (ROM) via the C array; runtime memory use is small because tensors are sized to the model and allocation avoids heap fragmentation.
+
+5) Edge preprocessing: scaling and determinism (`edge_device/src/scaler.h`)
+
+- Inputs to the FFNN must be scaled the same way they were during training. The project exports per‑feature means/std or min/max into `edge_device/src/scaler.h`.
+- At inference: each numeric feature is normalized using these constants, producing the model input vector. This ensures parity between server training and edge inference.
+
+6) TinyML runtime on ESP32 (`edge_device/src/tinyml_inference.h` / `tinyml_weights.h`)
+
+- Two main approaches used in projects like this repo:
+  - Lightweight manual feed‑forward: a small C routine that applies the dense layers using the exported weight arrays (simple matrix multiply + bias + activation) — minimal dependency, tiny binary.
+  - TFLite Micro (TFLM): include the TFLM runtime in firmware and load the `.tflite` model data (as C array). TFLM handles tensors, op implementations, and quantized int8 math.
+- This repo supports exporting a C array for direct inclusion; the inference function loads constants, runs scale→inference→score, and returns a numeric `edge_score`.
+
+7) When and how the ESP32 mirrors data
+
+- Mirror trigger: configurable threshold and sampling policy in `edge_device/src/edge_mirror.h` (e.g., mirror when `edge_score >= MIRROR_THRESHOLD` or on suspicious heuristics).
+- Sampling: to reduce bandwidth and privacy risk, the device can randomly sample mirrored events (probabilistic sampling), limit frequency, and truncate payloads.
+- Mirror payload: JSON with scaled features, model score, device id, timestamp, and optional truncated packet bytes or metadata.
+- Transport options implemented in the project:
+  - MQTT: publish to topic `iot/mirror/{DEVICE_ID}` — typical for asynchronous, lightweight IoT messaging.
+  - HTTP POST: POST to `/api/mirror` on the backend for environments where MQTT isn’t used.
+- Backend subscribers: `backend/mqtt_subscriber.py` listens to `iot/mirror/#` and forwards decoded samples to the sandbox for processing.
+
+8) Backend sandbox deeper analysis (`backend/sandbox.py`, `backend/anomaly_detector.py`)
+
+- Ingest & persist: `sandbox.ingest_sample()` stores the mirrored sample into the DB (via `block_manager`) so there is an audit trail and for offline debugging.
+- Model selection for deeper analysis: sandbox chooses which model/heuristic to run based on availability and context (this project’s logic is rule‑based but typical approaches are):
+  - If a small server model is available (lightweight sklearn/GNB/SVM), run it for a fast confirmation.
+  - If sample carries payload bytes and a payload‑aware model exists, use that (payload models are more expensive but more accurate).
+  - If the edge score is near the decision threshold (uncertain), run a heavier model (Keras/TensorFlow/XGBoost) for better accuracy.
+  - If no heavy model is available, fallback to heuristics or the anomaly_detector (a simpler model implemented in `backend/anomaly_detector.py`).
+- Typical steps in `analyze_sample()`:
+  - Reconstruct the feature vector as the server expects, apply the same scaling, run the chosen model(s), and compute a confidence and `attack_type` via `attack_analyzer.py`.
+  - Map model output to a `sandbox_decision`: `CONFIRMED`, `REJECTED`, or `NEEDS_REVIEW` depending on score and confidence.
+- Promotion: if decision == `CONFIRMED`, sandbox instructs `block_manager.promote_command()` to create a `PENDING` blocking command targeted to the device or network artifact (IP, port, pattern).
+
+9) Blocking commands: creation, storage, and delivery (`backend/block_manager.py`, `backend/routes.py`)
+
+- Creation: `block_manager` stores the blocking command record with metadata (target, reason, TTL, creation time, origin=sandbox).
+- Delivery options:
+  - Push via MQTT: backend publishes the blocking command JSON to `iot/commands/{DEVICE_ID}` (broker). This often uses the same MQTT broker used for mirrors. The backend may use `paho-mqtt` client to publish.
+  - Pull/poll: ESP32 periodically polls a REST endpoint like `/api/commands/pending/{device}` implemented in `backend/routes.py`. The device then fetches pending commands and acknowledges them.
+- Enforcement at edge (ESP32):
+  - `block_command.h` parses the received command and updates the local block list or `pattern_cache`.
+  - `pattern_cache` or `block_list` stores patterns, IPs, ports, or other conditions plus TTL counters.
+  - Packet handling calls `shouldDropPacket()` which checks the block list and returns true to drop matching packets. Actual dropping depends on how packet capture/forwarding is implemented in firmware (e.g., if using raw packet hooks, return without forwarding; if using firewall APIs, add rules).
+
+10) Tools and libraries used across the pipeline
+
+- Training & conversion: TensorFlow / Keras, TensorFlow Lite Converter (`tflite_converter`), representative dataset for quantization, `train_tflite.py`, `export_weights.py`.
+- Model export → firmware: `xxd -i` or a Python exporter that writes `tinyml_weights.h` as a C byte array.
+- Tiny runtime on device: either a small manual C implementation of the FFNN or TensorFlow Lite Micro (TFLM) for quantized models.
+- Messaging & delivery: MQTT (Mosquitto broker), `paho-mqtt` on backend, PubSubClient or other MQTT client on ESP32; HTTP (Flask endpoints) as an alternative for polling.
+- Backend server: Flask + Flask‑SocketIO, SQLite (via `block_manager`), `backend/mqtt_subscriber.py` to bridge MQTT→backend processing.
+
+11) Why this architecture is effective
+
+- Low latency detection: the TinyML FFNN runs locally and gives instant scores so many events can be triaged without cloud roundtrips.
+- Bandwidth & privacy control: mirroring is sampled and truncated so only high‑value samples are sent to the server.
+- Accurate confirmation: sandbox runs stronger models or payload‑aware analysis before issuing disruptive commands, reducing false positives.
+- Reliable delivery: commands are persisted in DB and delivered either by push (MQTT) or pull (polling), ensuring the device receives enforcement actions even after transient disconnects.
+- Small memory footprint: quantization + tiny topologies + TFLM static allocations make the model fit microcontroller flash and RAM budgets.
+
+12) Feed‑forward neural network specifics — creation & usage in this project
+
+- Creation (server side): build small Keras Sequential network in `train.py`:
+  - Define input shape matching N features.
+  - Add Dense(hidden_units, activation='relu') layers; keep network small to limit parameters.
+  - Final Dense(1, activation='sigmoid') for a 0–1 anomaly score.
+  - Train with `optimizer='adam'`, `loss='binary_crossentropy'` or use reconstruction loss for autoencoders.
+- Validation: `evaluate.py` checks accuracy, AUC, precision/recall; logs metrics to `models/metrics.json`.
+- Conversion: `train_tflite.py` converts to `.tflite`, applying `optimizations=[tf.lite.Optimize.DEFAULT]` and passing representative data for integer quantization.
+- Export: `export_weights.py` writes the FlatBuffer bytes into `edge_device/src/tinyml_weights.h` as a C byte array.
+- Inference (device): `tinyml_inference.h` uses constants from `scaler.h`, loads the byte array (if using TFLM) or weight arrays (if manual) and computes `edge_score`.
+
+13) Example end‑to‑end scenario (short walkthrough)
+
+- ESP32 captures flow → extracts features → scales inputs → FFNN returns score 0.87.
+- If `MIRROR_THRESHOLD = 0.8`, the device mirrors a JSON sample (features + score) to `iot/mirror/ESP32-01` on MQTT.
+- Backend `mqtt_subscriber.py` receives the sample → passes to `sandbox.ingest_sample()` which stores the sample.
+- `sandbox.analyze_sample()` runs the heavier model (payload‑aware if available) → `attack_analyzer.py` maps the result to `attack_type: port_scan, confidence: 0.96`.
+- Sandbox `CONFIRMED` → `block_manager.promote_command()` creates a `block_ip` command targeting the hostile IP.
+- Backend publishes command to `iot/commands/ESP32-01` (MQTT) and/or routes it to the pending commands endpoint.
+- ESP32 subscribed to `iot/commands/ESP32-01` receives the JSON → `block_command.h` parses it → `pattern_cache` updated with new rule (IP, TTL).
+- Packet loop consults `shouldDropPacket()` → matching packets are dropped → attack blocked close to the edge.
+
+14) Where to look in this repository
+
+- Sandbox logic: [backend/sandbox.py](backend/sandbox.py)
+- Persistence and command lifecycle: [backend/block_manager.py](backend/block_manager.py)
+- Lightweight server detection fallback: [backend/anomaly_detector.py](backend/anomaly_detector.py)
+- Mirror ingestion and routes: [backend/routes.py](backend/routes.py)
+- MQTT bridge: [backend/mqtt_subscriber.py](backend/mqtt_subscriber.py)
+- Edge TinyML weights & scaler: [edge_device/src/tinyml_weights.h](edge_device/src/tinyml_weights.h) and [edge_device/src/scaler.h](edge_device/src/scaler.h)
+- Edge inference helper: [edge_device/src/tinyml_inference.h](edge_device/src/tinyml_inference.h)
+- Edge mirroring logic: [edge_device/src/edge_mirror.h](edge_device/src/edge_mirror.h)
+- Firmware command parsing and cache: [edge_device/src/block_command.h](edge_device/src/block_command.h) and [edge_device/src/pattern_cache.h](edge_device/src/pattern_cache.h)
+
+15) Short recommendations for extension or tuning
+
+- If false positives occur, raise mirror threshold or require multiple correlated detections before mirroring.
+- Add representative dataset calibration when converting to int8 to preserve accuracy.
+- Consider tiny pruning and weight clustering if model still too large for flash.
+- If payload analysis is needed, add opt‑in extra fields to the mirror JSON and keep truncation strict to preserve privacy.
+
+End of document.

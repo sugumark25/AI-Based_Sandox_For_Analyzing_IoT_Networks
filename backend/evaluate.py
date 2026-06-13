@@ -330,3 +330,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+#     A standalone script to deeply evaluate the trained models. Generates detailed
+# metrics, confusion matrices, ROC/PR curves, and analyzes the best thresholds.

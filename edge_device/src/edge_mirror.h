@@ -47,23 +47,35 @@ public:
         float feat[SCALER_N_FEATURES];
         flowToArray(f, feat);
 
-        bool sent = false;
+        bool should_send = false;
 
-        // ── Try MQTT ──────────────────────────────────────────────
-        if (_mqttAvailable()) {
-            sent = _sendMQTT(feat, z_score, result);
-            if (sent) {
-                mr.used_mqtt = true;
-                mqtt_sent++;
-            }
+        // Decide whether to mirror: always mirror detected attacks or
+        // flows with z_score >= MIRROR_THRESHOLD. Otherwise sample a small percent.
+        if (result.is_attack || z_score >= MIRROR_THRESHOLD) {
+            should_send = true;
+        } else {
+            int pct = random(100);
+            if (pct < MIRROR_SAMPLE_PERCENT) should_send = true;
         }
 
-        // ── HTTP fallback ─────────────────────────────────────────
-        if (!sent && _httpAvailable()) {
-            int code = _sendHTTP(feat, z_score, result);
-            sent         = (code == 200);
-            mr.http_code = code;
-            if (sent) http_sent++;
+        bool sent = false;
+        if (should_send) {
+            // ── Try MQTT ──────────────────────────────────────────
+            if (_mqttAvailable()) {
+                sent = _sendMQTT(feat, z_score, result);
+                if (sent) {
+                    mr.used_mqtt = true;
+                    mqtt_sent++;
+                }
+            }
+
+            // ── HTTP fallback ─────────────────────────────────────
+            if (!sent && _httpAvailable()) {
+                int code = _sendHTTP(feat, z_score, result);
+                sent         = (code == 200);
+                mr.http_code = code;
+                if (sent) http_sent++;
+            }
         }
 
         mr.latency_ms = (float)(millis() - t_start);
@@ -101,7 +113,8 @@ private:
                        float             z_score,
                        const EdgeResult& result)
     {
-        JsonDocument doc;
+        // Use a static-size dynamic JSON document
+        StaticJsonDocument<512> doc;
 
         doc["device_id"]       = DEVICE_ID;
         doc["z_score"]         = z_score;
@@ -109,9 +122,10 @@ private:
         doc["edge_decision"]   = result.is_attack;
         doc["timestamp"]       = millis();
 
-        JsonArray arr = doc["features"].to<JsonArray>();
-        for (int i = 0; i < SCALER_N_FEATURES; i++)
-            arr.add(feat[i]);
+        // Include a truncated features array to limit message size
+        JsonArray arr = doc.createNestedArray("features");
+        int max_f = min(SCALER_N_FEATURES, 8); // include first 8 features
+        for (int i = 0; i < max_f; i++) arr.add(feat[i]);
 
         size_t written = serializeJson(doc, buf, buf_size);
         return (written > 0 && written < buf_size);
@@ -123,16 +137,14 @@ private:
     {
         // ── Increase buffer to handle 226 byte payloads ───────────
         mqttClient.setBufferSize(512);
-
+        // Build a compact payload with metadata and limited features
         char payload[512];
         if (!_buildPayload(payload, sizeof(payload), feat, z_score, result))
             return false;
 
         char topic[72];
-        if (result.is_attack)
-            snprintf(topic, sizeof(topic), "iot/edge/attacks/%s", DEVICE_ID);
-        else
-            snprintf(topic, sizeof(topic), "iot/edge/normal/%s",  DEVICE_ID);
+        // Use unified mirror topic so backend subscribes to iot/mirror/#
+        snprintf(topic, sizeof(topic), "iot/mirror/%s", DEVICE_ID);
 
         // ── Retry once before giving up ───────────────────────────
         bool ok = mqttClient.publish(topic, payload, false);

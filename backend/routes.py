@@ -156,13 +156,16 @@ def predict():
             # Create blocking command
             block_mgr = get_block_manager()
             device_id = raw.get("device_id", "esp32-unknown")
-            
+            # Do NOT send command directly to device — wait for sandbox confirmation.
+            # Create the command in PENDING_SANDBOX state so it is not returned
+            # by /api/commands/pending until sandbox confirms.
             block_cmd = block_mgr.create_command(
                 device_id=device_id,
                 action=block_decision["action"],
                 target=block_decision["target"],
                 reason=block_decision["attack_type"],
-                attack_data=features_dict
+                attack_data=features_dict,
+                status="PENDING_SANDBOX",
             )
             
             log.warning(
@@ -223,6 +226,51 @@ def health():
         "timestamp": datetime.now().isoformat(),
         "version": "5.0",
     })
+
+
+# ─────────────────────────────────────────────────────
+# MIRROR / SANDBOX ENDPOINTS
+# ─────────────────────────────────────────────────────
+
+
+@api_bp.route("/mirror", methods=["POST"])
+def post_mirror():
+    """Accept mirrored metadata from edge devices via HTTP POST.
+    This endpoint is optional; edges may publish to MQTT instead.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    if not payload:
+        return jsonify({"error": "invalid JSON"}), 400
+    try:
+        from sandbox import ingest_sample
+        rec = ingest_sample(payload)
+        return jsonify({"status": "ingested", **rec}), 201
+    except Exception as e:
+        log.error("Sandbox ingestion failed: %s", e)
+        return jsonify({"error": "ingestion failed", "detail": str(e)}), 500
+
+
+@api_bp.route("/mirror/history", methods=["GET"])
+def mirror_history():
+    limit = int(request.args.get("limit", 50))
+    try:
+        from sandbox import list_recent
+        rows = list_recent(limit=limit)
+        return jsonify({"count": len(rows), "samples": rows}), 200
+    except Exception as e:
+        log.error("Failed to fetch mirror history: %s", e)
+        return jsonify({"error": "failed", "detail": str(e)}), 500
+
+
+@api_bp.route("/mirror/latest", methods=["GET"])
+def mirror_latest():
+    try:
+        from sandbox import list_recent
+        rows = list_recent(limit=1)
+        return jsonify(rows[0] if rows else {}), 200
+    except Exception as e:
+        log.error("Failed to fetch latest mirror: %s", e)
+        return jsonify({"error": "failed", "detail": str(e)}), 500
 
 
 # ─────────────────────────────────────────────────────
@@ -388,3 +436,7 @@ def get_blocks_summary():
         "by_reason": by_reason,
         "history_sample": history[:10] if history else [],
     }), 200
+
+#     Defines the RESTful API endpoints (e.g., /health, /predict, /predict_batch,
+# /stats) used by the frontend to fetch system status, trigger manual predictions,
+# and retrieve model metrics

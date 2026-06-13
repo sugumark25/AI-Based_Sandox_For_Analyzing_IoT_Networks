@@ -4,6 +4,7 @@ import TrafficAnalysis from "./components/TrafficAnalysis";
 import ModelMetrics    from "./components/ModelMetrics";
 import DevicePanel     from "./components/DevicePanel";
 import AlertsPanel     from "./components/AlertsPanel";
+import MirroredSamplesPanel from "./components/MirroredSamplesPanel";
 import "./styles/global.css";
 
 const NAV = [
@@ -12,6 +13,7 @@ const NAV = [
   { key: "model",     label: "ML Metrics", icon: "◆", color: "#00ff88" },
   { key: "device",    label: "Device",     icon: "◎", color: "#ffb800" },
   { key: "alerts",    label: "Alerts",     icon: "⚠", color: "#ff2d55" },
+  { key: "mirrors",   label: "Mirrors",    icon: "✉", color: "#8e6cff" },
 ];
 
 export default function App() {
@@ -105,6 +107,7 @@ export default function App() {
         {active === "model"     && <ModelMetrics />}
         {active === "device"    && <DevicePanel />}
         {active === "alerts"    && <AlertsPanel />}
+        {active === "mirrors"   && <MirroredSamplesPanel />}
       </main>
 
       {/* ── Footer ──────────────────────────────────────────── */}

@@ -1,4 +1,4 @@
-# IoT Anomaly Detection & Attack Blocking System
+# AI-Based Sandbox for Analyzing Iot Network
 
 This project detects abnormal network behavior in IoT systems using a hybrid approach of an ESP32 edge device and machine learning analysis in a Python backend, visualized in a React dashboard. **Includes automated attack blocking with real-time command execution!**
 

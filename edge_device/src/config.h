@@ -6,7 +6,7 @@
 
 #define BACKEND_HOST     "192.168.137.1"
 #define BACKEND_PORT     5001
-#define PREDICT_PATH     "/api/realtime"
+#define PREDICT_PATH     "/api/mirror"
 
 #define MQTT_BROKER_HOST "192.168.137.1"
 #define MQTT_BROKER_PORT 1883
@@ -29,6 +29,11 @@
 
 #define Z_THRESHOLD      2.0f
 #define WINDOW_SIZE      30
+
+// Mirroring configuration
+#define MIRROR_THRESHOLD    2.5f    // z-score threshold to force mirror
+#define MIRROR_SAMPLE_PERCENT 1     // percent chance to sample non-alert flows
+#define MIRROR_MAX_BYTES    64      // max bytes to include if payload is captured
 
 #define CACHE_MAX_SIZE   50
 #define CACHE_SIM_THRESH 0.95f

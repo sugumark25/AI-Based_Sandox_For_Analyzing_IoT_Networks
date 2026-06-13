@@ -266,7 +266,7 @@ class AnomalyDetector:
             batch_size=batch_size,
             validation_split=0.15,
             callbacks=callbacks,
-            verbose=0,
+            verbose=0,  
         )
 
         # Threshold = 97th percentile of normal reconstruction error
@@ -318,6 +318,7 @@ class AnomalyDetector:
             "val_auc": [roc_auc_score(y_val, ens_proba)],
         }
 
+    # Combine XGBoost and Autoencoder using weighted ensemble
     def _ensemble_proba_raw(self, X_aug, xgb_proba, recon_err):
         ae_score = (recon_err - self.ae_threshold) / (self.ae_threshold + 1e-9)
         ae_p     = _safe_sigmoid(ae_score)
@@ -429,3 +430,17 @@ def get_detector():
         _detector = AnomalyDetector()
         _detector.load()
     return _detector
+
+
+# Build a deep autoencoder model
+# Train the XGBoost classifier
+# Train the autoencoder using normal traffic
+# Add extra interaction features to improve detection
+# Calibrate XGBoost prediction probabilities
+# Convert autoencoder reconstruction error into anomaly probability
+# Search the best ensemble weights
+# Search the best decision threshold
+# Predict whether a single network flow is normal or attack
+# Evaluate the model using accuracy, F1-score, AUC-ROC, and confusion matrix
+# Save trained models and metadata
+# Load saved models for backend/API prediction

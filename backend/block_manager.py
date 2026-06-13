@@ -117,6 +117,26 @@ class BlockManager:
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # Add mirrored_samples table here so DB is consolidated
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS mirrored_samples (
+                    id TEXT PRIMARY KEY,
+                    device_id TEXT,
+                    timestamp TEXT,
+                    src_ip TEXT,
+                    dst_ip TEXT,
+                    src_port INTEGER,
+                    dst_port INTEGER,
+                    proto TEXT,
+                    payload_hash TEXT,
+                    sample_bytes BLOB,
+                    edge_score REAL,
+                    sandbox_score REAL,
+                    sandbox_decision TEXT,
+                    raw_json TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
     
     def _get_conn(self):
@@ -126,7 +146,7 @@ class BlockManager:
         return conn
     
     def create_command(self, device_id: str, action: str, target: str,
-                      reason: str, attack_data: dict) -> BlockingCommand:
+                      reason: str, attack_data: dict, status: str = "PENDING") -> BlockingCommand:
         """Create and store a new blocking command."""
         import uuid
         cmd_id = f"cmd_{uuid.uuid4().hex[:12]}"
@@ -137,7 +157,7 @@ class BlockManager:
             target=target,
             reason=reason,
             attack_data=attack_data,
-            status="PENDING",
+            status=status,
         )
         
         with _lock:
@@ -300,6 +320,31 @@ class BlockManager:
                     """, (limit,)).fetchall()
         
         return [dict(row) for row in rows]
+
+    # New helpers for sandbox workflow
+    def find_pending_sandbox(self, device_id: str, target: str):
+        """Find an existing command that is waiting for sandbox confirmation."""
+        with _lock:
+            with self._get_conn() as conn:
+                row = conn.execute("""
+                    SELECT * FROM blocking_commands
+                    WHERE device_id = ? AND target = ? AND status = 'PENDING_SANDBOX'
+                    ORDER BY created_at ASC LIMIT 1
+                """, (device_id, target)).fetchone()
+        return row["cmd_id"] if row else None
+
+    def promote_command(self, cmd_id: str) -> bool:
+        """Promote a sandbox-pending command to normal pending so device can receive it."""
+        with _lock:
+            with self._get_conn() as conn:
+                conn.execute("""
+                    UPDATE blocking_commands
+                    SET status = 'PENDING'
+                    WHERE cmd_id = ?
+                """, (cmd_id,))
+                conn.commit()
+        log.info("Promoted command to PENDING: %s", cmd_id)
+        return True
     
     def cleanup_old_commands(self, days: int = 7) -> int:
         """Remove completed commands older than N days."""
